@@ -70,7 +70,7 @@ func (w *Watcher) Watch(events chan<- string) {
 				return
 			}
 
-			if w.filter.ShouldIgnoreExt(filepath.Ext(event.Name)) {
+			if w.filter.ShouldIgnoreExt(event.Name) {
 				continue
 			}
 
