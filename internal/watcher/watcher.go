@@ -14,6 +14,7 @@ type Watcher struct {
 	filter    *Filter
 }
 
+// NewWatcher initializes a new Watcher for the specified root directory
 func NewWatcher(root string) (*Watcher, error) {
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -35,6 +36,7 @@ func NewWatcher(root string) (*Watcher, error) {
 	return w, nil
 }
 
+// Add Directory and its subdirectories to the watcher, skipping ignored directories
 func (w *Watcher) addDirectory(dir string) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -59,6 +61,7 @@ func (w *Watcher) addDirectory(dir string) error {
 	})
 }
 
+// Watch for file system events and send changed file paths to the events channel
 func (w *Watcher) Watch(events chan<- string) {
 	for {
 		select {
@@ -67,16 +70,11 @@ func (w *Watcher) Watch(events chan<- string) {
 				return
 			}
 
-			if event.Op == fsnotify.Chmod {
-				continue
-			}
-
 			if w.filter.ShouldIgnoreExt(filepath.Ext(event.Name)) {
 				continue
 			}
 
-			slog.Info(event.Op.String())
-			slog.Debug("File changed", "event", event.Name)
+			slog.Debug("File changed", "op", event.Op.String(), "event", event.Name)
 			events <- event.Name
 
 		case err, ok := <-w.fsWatcher.Errors:
