@@ -70,6 +70,21 @@ func (w *Watcher) Watch(events chan<- string) {
 				return
 			}
 
+			// If a new directory was created, watch it and its subtree.
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if !w.filter.ShouldIgnoreDir(info.Name()) {
+						if err := w.addDirectory(event.Name); err != nil {
+							slog.Warn("Failed to watch new directory", "path", event.Name, "error", err)
+						} else {
+							slog.Debug("Now watching new directory", "path", event.Name)
+						}
+					}
+					// Don't forward bare dir-create as a reload trigger.
+					continue
+				}
+			}
+
 			if w.filter.ShouldIgnoreExt(event.Name) {
 				continue
 			}
@@ -81,7 +96,7 @@ func (w *Watcher) Watch(events chan<- string) {
 			if !ok {
 				return
 			}
-			slog.Error("Watcher error", "error", err)
+			slog.Warn("Watcher error", "error", err)
 		}
 	}
 }
