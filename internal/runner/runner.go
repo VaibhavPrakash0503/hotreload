@@ -74,19 +74,20 @@ func (r *Runner) Start(ctx context.Context) error {
 	go io.Copy(os.Stderr, stderr)
 
 	// Monitor process in background
-	go r.monitor()
+	cmd := r.cmd
+	go r.monitor(cmd)
 
 	slog.Info("Process started", "pid", r.cmd.Process.Pid)
 	return nil
 }
 
-func (r *Runner) monitor() {
-	if r.cmd == nil || r.cmd.Process == nil {
+func (r *Runner) monitor(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
 
 	// Wait for process to exit
-	err := r.cmd.Wait()
+	err := cmd.Wait()
 
 	r.mu.Lock()
 	r.running = false
@@ -101,42 +102,42 @@ func (r *Runner) monitor() {
 
 func (r *Runner) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if !r.running || r.cmd == nil || r.cmd.Process == nil {
+		r.mu.Unlock()
 		return nil // Nothing to stop
 	}
 
 	slog.Info("Stopping process", "pid", r.cmd.Process.Pid)
 
-	// Try graceful shutdown first
+	// Signal graceful shutdown
 	if err := r.cmd.Process.Signal(os.Interrupt); err != nil {
-		// Process might have already exited
 		r.running = false
+		r.mu.Unlock()
 		return nil
 	}
+	r.mu.Unlock()
 
-	// Wait up to 5 seconds for graceful exit
-	done := make(chan error, 1)
-	go func() {
-		done <- r.cmd.Wait()
-	}()
-
-	select {
-	case <-done:
-		// Process exited gracefully
-		slog.Info("Process stopped gracefully")
-		r.running = false
-		return nil
-
-	case <-time.After(5 * time.Second):
-		// Timeout - force kill
-		slog.Warn("Process did not stop gracefully, force killing")
-		if err := forceKill(r.cmd); err != nil {
-			slog.Error("Failed to force kill process", "error", err)
-			return err
+	// Poll the running flag (set to false by monitor when Wait returns)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		r.mu.Lock()
+		stillRunning := r.running
+		r.mu.Unlock()
+		if !stillRunning {
+			slog.Info("Process stopped gracefully")
+			return nil
 		}
-		r.running = false
-		return nil
 	}
+
+	// Timeout — force kill
+	slog.Warn("Process did not stop gracefully, force killing")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := forceKill(r.cmd); err != nil {
+		slog.Error("Failed to force kill process", "error", err)
+		return err
+	}
+	return nil
 }
