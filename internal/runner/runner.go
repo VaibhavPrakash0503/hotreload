@@ -12,11 +12,13 @@ import (
 )
 
 type Runner struct {
-	command string
-	args    []string
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	running bool
+	command    string
+	args       []string
+	cmd        *exec.Cmd
+	mu         sync.Mutex
+	running    bool
+	startTime  time.Time // when the process last started
+	crashCount int       // consecutive fast crashes (<2s uptime)
 }
 
 func NewRunner(execCmd string) *Runner {
@@ -35,12 +37,29 @@ func NewRunner(execCmd string) *Runner {
 
 func (r *Runner) Start(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if r.running {
 		slog.Warn("Attempted to start process, but it's already running")
+		r.mu.Unlock()
 		return nil
 	}
+
+	// Exponential backoff for consecutive fast crashes
+	if r.crashCount > 0 {
+		backoff := time.Duration(min(1<<r.crashCount, 30)) * time.Second
+		slog.Warn("Backing off before restart", "delay", backoff, "consecutive_crashes", r.crashCount)
+		r.mu.Unlock()
+
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		r.mu.Lock()
+	}
+
+	defer r.mu.Unlock()
 
 	// Create command
 	r.cmd = exec.CommandContext(ctx, r.command, r.args...)
@@ -68,6 +87,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 
 	r.running = true
+	r.startTime = time.Now()
 
 	// Stream logs in goroutines
 	go io.Copy(os.Stdout, stdout)
@@ -90,6 +110,16 @@ func (r *Runner) monitor(cmd *exec.Cmd) {
 	err := cmd.Wait()
 
 	r.mu.Lock()
+	uptime := time.Since(r.startTime)
+	if uptime < 2*time.Second {
+		r.crashCount++
+		slog.Warn("Process crashed too quickly",
+			"uptime", uptime.Round(time.Millisecond),
+			"consecutive_crashes", r.crashCount,
+		)
+	} else {
+		r.crashCount = 0
+	}
 	r.running = false
 	r.mu.Unlock()
 
