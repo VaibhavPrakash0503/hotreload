@@ -1,0 +1,9 @@
+# Build output
+bin/
+
+# Test coverage
+coverage.out
+
+# Go temp files
+*.test
+*.out
